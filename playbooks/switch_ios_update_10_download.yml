@@ -1,0 +1,380 @@
+#
+# pb_switch_update_10_prep_upload.yml
+#
+
+
+#--------------------------------------------------------------
+- name: IOS Upgrade
+#--------------------------------------------------------------
+  hosts: iosxe
+  become: no
+  gather_facts: no
+
+  serial: 10
+  
+  vars:
+    tftpserver: 131.102.125.138
+    tftppath: /
+    tftpbase: /data/tftpboot
+
+    ftpserver: 131.102.125.138
+    ftppath: transfer
+    ftpbase: /data/ftp
+
+    DTG: "{{ lookup('pipe', 'date +\"%Y.%m.%d\"') }}"
+
+  tasks:
+
+    #--------------------------------------------------------------
+    # backup dir
+    #--------------------------------------------------------------
+    - name: Created directory for config backups (~/autonet/backups/{{DTG}}/)
+      file:
+        path: ~/autonet/backups/{{DTG}}
+        state: directory
+      delegate_to: localhost
+      changed_when: False
+      run_once: true
+
+
+    #--------------------------------------------------------------
+    # Facts
+    #--------------------------------------------------------------
+    - name: Gather facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - min
+          - hardware
+      tags: [devel,showversion]
+
+
+    #--------------------------------------------------------------
+    # model check
+    #--------------------------------------------------------------
+    - name: Check supported model
+      include_role:
+        name: check_model
+
+
+    #--------------------------------------------------------------
+    # version checks
+    #--------------------------------------------------------------
+    - name: Check running version
+      include_role:
+        name: check_version
+
+    # used protocol
+    - debug:
+        msg: "copy_protocol = {{ copy_protocol }}"
+
+
+    #--------------------------------------------------------------
+    - name: Get Running Config
+    #--------------------------------------------------------------
+      ansible.netcommon.cli_command:
+        command: show run
+      register: running_config
+
+    #--------------------------------------------------------------
+    # old TACACS mode is unsupported --> breaks ACS access after reload
+    - name: detect old TACACS mode from running config
+    #--------------------------------------------------------------
+      ansible.builtin.assert:
+        that:
+          - "'tacacs-server host ' not in running_config.stdout"
+        fail_msg: "old TACACS mode (tacacs-server host) on device, this is unsupported"
+
+
+    #--------------------------------------------------------------
+    # file presence in tftpdir (same location for tftp and scp)
+    #--------------------------------------------------------------
+    - name: file presence check (TFTP/SCP)
+      block:
+        - name: Check for IOS image on tftp server 1 (TFTP/SCP)
+          delegate_to: localhost
+          stat:
+            path: "{{ tftpbase }}{{ tftppath }}/{{ new_ios_image_file }}"
+          register: stat_img_presence
+
+        - name: Check for IOS image on tftp server 2
+          fail:
+            msg: "missing IOS image ({{ new_ios_image_file }}) in {{ tftpbase }}{{ tftppath }}"
+          when: stat_img_presence.stat.exists == false
+      when: copy_protocol in ["tftp", "scp"]
+
+
+    #--------------------------------------------------------------
+    # file presence in ftpdir (location for ftp)
+    #--------------------------------------------------------------
+    - name: file presence check (FTP)
+      block:
+        - name: Check for IOS image on tftp server 1 (FTP)
+          delegate_to: localhost
+          stat:
+            path: "{{ ftpbase }}/{{ ftppath }}/{{ new_ios_image_file }}"
+          register: stat_img_presence
+
+        - name: Check for IOS image on tftp server 2
+          fail:
+            msg: "missing IOS image ({{ new_ios_image_file }}) in {{ ftpbase }}/{{ ftppath }}"
+          when: stat_img_presence.stat.exists == false
+      when: copy_protocol == "ftp"
+
+
+    # #--------------------------------------------------------------
+    # - name: Backup Running Config
+    # #--------------------------------------------------------------
+    #   ansible.netcommon.cli_command:
+    #     command: show run
+    #   register: config
+
+    - name: Save running config to backups/
+      copy:
+        content: "{{ running_config.stdout }}"
+        dest: "~/autonet/backups/{{DTG}}/{{ inventory_hostname }}-{{DTG}}-config.txt"
+
+
+    #--------------------------------------------------------------
+    - name: Save running config to startup config
+    #--------------------------------------------------------------
+      ios_config:
+        save_when: modified
+      vars:
+        ansible_command_timeout: 120
+
+
+    #--------------------------------------------------------------
+    # 3560CX have small flash. Preventive deletion of old stuff
+    #--------------------------------------------------------------
+    - name: cleanup old content on 3560CX tiny flash
+      block:
+
+        # ansible.builtin.find does not work on IOS
+        - name: find obsolete files in flash
+          ansible.netcommon.cli_command:
+            command: dir flash:*.tar | inc -rwx
+          register: files_to_delete
+
+        # example output of "dir flash:*.tar | inc -rwx"
+        # bermon74-int-x033#dir flash:*.tar | inc -rwx
+        #    8  -rwx    22880256   Dec 1 2021 14:10:42 +01:00  cbtest.tar
+        #   11  -rwx       10600   Dec 1 2021 14:16:39 +01:00  cbtest2.tar
+
+        - set_fact:
+            files_to_delete_list: "{{ files_to_delete.stdout_lines | map('regex_search', '([\\w\\.-]+)$', '\\1') | list | flatten | list}}"
+
+        - name: delete obsolete files in flash
+          ansible.netcommon.cli_command:
+            command: delete /force {{ item }}
+          when: item != new_ios_image_file
+          loop: "{{ files_to_delete_list }}"
+
+      when:
+        - ansible_facts["net_model"] is search("WS-C3560CX-")
+    # end block C3560CX
+    #--------------------------------------------------------------
+
+
+    #--------------------------------------------------------------
+    # check if the image is already present
+    # and upload it if not
+    - name: get flash content
+      ansible.netcommon.cli_command:
+        command: "show flash: | inc {{ new_ios_image_file }}"
+      register: showflash
+      run_once: true
+
+    # - debug:
+    #     msg:
+    #     - "showflash {{ showflash }}"
+
+    # if img was found, inform
+    - debug:
+        msg: "image {{ new_ios_image_file }} is already on target"
+      when: showflash is search(new_ios_image_file)
+
+
+    #--------------------------------------------------------------
+    - name: check sufficient space in flash step 1
+    #--------------------------------------------------------------
+      set_fact:
+        free_space: "{{ ansible_net_filesystems_info | json_query('*.spacefree_kb') | first}}"
+
+    - name: check sufficient space in flash step 2
+      fail:
+        msg: "not enough flash memory to proceed. Free space : {{ free_space | int }}, minimum is {{ min_free_space * 1000| int }}. Consider using the pb_switch_update_cleanup.yml playbook to remove un-needed files from flash."
+      when:
+        - free_space | int < min_free_space * 1000 | int
+        - showflash is not search(new_ios_image_file)
+
+
+    # img wasn't found, so upload it to target
+    # some info because Ansible says nothing during this long task, until ok/fail
+    - debug:
+        msg: "image {{ new_ios_image_file }} is not yet on target, be patient (image upload)"
+      when: showflash is not search(new_ios_image_file)
+
+
+    #--------------------------------------------------------------
+    - name: Copy Image using tftp // This could take up to 15 minutes
+    #--------------------------------------------------------------
+      ansible.netcommon.cli_command:
+        command: "copy tftp://{{ tftpserver }}/{{ tftppath }}/{{ new_ios_image_file }} flash:{{ new_ios_image_file }}"
+        check_all: True
+        prompt:
+          - "Destination filename.*"
+          - "Do you want to over write.*"
+        answer:
+          - ''
+          - ''
+      vars:
+        ansible_command_timeout: 1800
+      when:
+        - showflash is not search(new_ios_image_file)
+        - copy_protocol == "tftp"
+
+
+    #--------------------------------------------------------------
+    - name: Copy Image using ftp // This could take up to 1 hour
+    #--------------------------------------------------------------
+      ansible.netcommon.cli_command:
+        command: "copy ftp://{{ ftpserver }}/{{ ftppath }}/{{ new_ios_image_file }} flash:{{ new_ios_image_file }}"
+        check_all: True
+        prompt:
+          - "Destination filename.*"
+          - "Do you want to over write.*"
+        answer:
+          - ''
+          - ''
+      vars:
+        ansible_command_timeout: 3603
+      when:
+        - showflash is not search(new_ios_image_file)
+        - copy_protocol == "ftp"
+
+
+    #--------------------------------------------------------------
+    - name: Copy Image using scp
+    #--------------------------------------------------------------
+      block:
+        - name: Ensure scp server is enabled
+          ansible.builtin.assert:
+            that:
+              - "'ip scp server enable' in running_config.stdout"
+            fail_msg: "please enable scp on device"
+
+        #--------------------------------------------------------------
+        - name: Copy Image using scp // This could take up to 15 minutes
+        #--------------------------------------------------------------
+          ansible.netcommon.net_put:
+            src: "{{ tftpbase }}{{ tftppath }}/{{ new_ios_image_file }}"
+            dest: flash:/{{ new_ios_image_file }}
+            protocol: scp
+            mode: binary
+      when:
+        - showflash is not search(new_ios_image_file)
+        - copy_protocol == "scp"
+
+
+    #--------------------------------------------------------------
+    - name: Verify Image presence
+    #--------------------------------------------------------------
+      ios_command:
+        commands:
+          - "dir flash:{{ new_ios_image_file }}"
+        wait_for:
+          - result[0] not contains "%Error"
+        retries: 1
+
+
+    #--------------------------------------------------------------
+    - name: Verify Image MD5 // This could take up to 2 minutes
+    #--------------------------------------------------------------
+      ios_command:
+        commands:
+          - "verify /md5 flash:{{ new_ios_image_file }}"
+        wait_for:
+          - "result[0] contains {{ new_ios_image_md5 }}"
+        retries: 1
+      vars:
+        ansible_command_timeout: 120
+
+
+    #--------------------------------------------------------------
+    - name: Verify boot from flash and in auto mode (C9300)
+    #--------------------------------------------------------------
+      ios_command:
+        commands:
+          - "show boot"
+        wait_for:
+          - result[0] contains "Manual Boot = no"
+          - result[0] contains "BOOT variable = flash:packages.conf"
+        retries: 1
+      when: ansible_facts["net_model"] is search("C9300-")
+
+    #--------------------------------------------------------------
+    - name: Verify boot from flash and in auto mode (C9500)
+    #--------------------------------------------------------------
+      ios_command:
+        commands:
+          - "show boot"
+        wait_for:
+          - result[0] contains "MANUAL_BOOT variable = no"
+          - result[0] contains "BOOT variable = bootflash:packages.conf"
+        retries: 1
+      when: ansible_facts["net_model"] is search("C9500-")
+
+
+    #--------------------------------------------------------------
+    - name: Verify mode (INSTALL but no BUNDLE) of C9300
+    #--------------------------------------------------------------
+      ios_command:
+        commands:
+          - "show version"
+        wait_for:
+          - result[0] contains "INSTALL"
+          - result[0] not contains "BUNDLE"
+        retries: 1
+      when: ansible_facts["net_model"] is search("C9300-")
+
+
+    #--------------------------------------------------------------
+    # boot points to a valid file
+    # show boot -->
+    #   BOOT path-list      : flash:/c3560cx-universalk9-mz.152-7.E2.bin
+    #   Config file         : flash:/config.text
+    #   Private Config file : flash:/private-config.text
+    #   ...
+    # the file from "BOOT path-list" must exist in flash:
+    # Muss auf ein vorhandenes .bin File zeigen. Zeigt die Konfiguration auf ein nicht vorhandenes .bin File, bootet der Switch nur in den ROMMON. Ein vor Ort Einsatz ist dann nötig
+    - name: check boot image on 3560CX
+      block:
+
+        - name: check boot image on 3560CX, step 1
+          ansible.netcommon.cli_command:
+            command: "show boot | inc BOOT path-list"
+          register: showboot
+
+        #- debug:
+        #    msg:
+        #    - "show boot {{ showboot.stdout_lines[0] }}"
+
+        - set_fact:
+            boot_path_list: "{{ showboot.stdout_lines[0] | regex_search(': (flash:/.*)$', '\\1') | first }}"
+
+        #- debug:
+        #    msg:
+        #    - "boot_path_list {{ boot_path_list }}"
+
+        - name: Verify Image presence
+          ios_command:
+            commands:
+              - "dir {{ boot_path_list }}"
+            wait_for:
+              - result[0] not contains "%Error opening"
+            retries: 1
+
+      when:
+        - ansible_facts["net_model"] is search("WS-C3560CX-")
+    # end block C3560CX
+    #--------------------------------------------------------------

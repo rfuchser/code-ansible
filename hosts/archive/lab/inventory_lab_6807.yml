@@ -1,0 +1,33 @@
+#
+# inventories/lab_6807.yml
+#
+
+
+cisco6807:
+
+  hosts:
+    berfll15a-lab-vce2.nms.admin.ch:
+        copy_protocol: scp
+
+  vars:
+    ansible_network_os: ios
+    ansible_connection: ansible.netcommon.network_cli
+
+    copy_protocol: ftp
+    # use either oss-jump2-nat
+    ftpserver: 131.102.155.138
+    # or oss-jump2
+    #ftpserver: 131.102.125.138
+
+    iosimages:
+      SUP2T:
+        ios_version_new: 15.5(1)SY7
+        new_ios_image_file: s2t54-ipservicesk9-mz.SPA.155-1.SY7.bin
+        new_ios_image_md5: bc945d69d09ebfde823eb602ede05ead
+        min_free_space: 250
+      SUP6T:
+        ios_version_new: 15.5(1)SY7
+        new_ios_image_file: s6t64-ipservicesk9-mz.SPA.155-1.SY7.bin
+        new_ios_image_md5: 6328f88621997e80756a88793dcc261e
+        min_free_space: 250
+

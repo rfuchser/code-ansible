@@ -1,0 +1,107 @@
+#
+# inventories/lab_6807.yml
+#
+
+
+cisco6807:
+
+  hosts:
+    berfll15a-lab-vce2.nms.admin.ch:
+        copy_protocol: scp
+    aarkas-vce1.nms.admin.ch:
+    airkas-vce1.nms.admin.ch:
+    alpflu-vce1.nms.admin.ch:
+    berbnr20-vce1.nms.admin.ch:
+    berbun-vce1.nms.admin.ch:
+    bereff20-vce1.nms.admin.ch:
+    bereff27-vce1.nms.admin.ch:
+    bereig65-vce1.nms.admin.ch:
+    berein2-vce1.nms.admin.ch:
+    berfin12-vce1.nms.admin.ch:
+    berfll15a-ejpd-vce2.nms.admin.ch:
+    berfll15-vce1.nms.admin.ch:
+    berfll21-prod-vce2.nms.admin.ch:
+    berfll21-vce1.nms.admin.ch:
+    berfre130-vce1.nms.admin.ch:
+    bergsp-vce1.nms.admin.ch:
+    bergsp-vce2.nms.admin.ch:
+    bergue24-ejpd-vce1.nms.admin.ch:
+    berhol-vce1.nms.admin.ch:
+    berkaa15-vce1.nms.admin.ch:
+    bermon49-vce1.nms.admin.ch:
+    bermon74-vce1.nms.admin.ch:
+    berpap-vce1.nms.admin.ch:
+    berrod110-vce1.nms.admin.ch:
+    bersta65-vce1.nms.admin.ch:
+    berswt55-vce1.nms.admin.ch:
+    bertau16-vce1.nms.admin.ch:
+    biears-vce1.nms.admin.ch:
+    bilzuk-vce1.nms.admin.ch:
+    blckas-vce1.nms.admin.ch:
+    bmdrep-vce1.nms.admin.ch:
+    brewaf-vce1.nms.admin.ch:
+    brreid-vce1.nms.admin.ch:
+    bruzur11-vce1.nms.admin.ch:
+    chacas-vce1.nms.admin.ch:
+    chukas-vce1.nms.admin.ch:
+    colars-vce1.nms.admin.ch:
+    drosiv-vce1.nms.admin.ch:
+    dubozd-vce1.nms.admin.ch:
+    dubzen-vce1.nms.admin.ch:
+    emmflu-vce1.nms.admin.ch:
+    frahau-vce1.nms.admin.ch:
+    frikas-vce1.nms.admin.ch:
+    genedm18-vce1.nms.admin.ch:
+    groamp-vce1.nms.admin.ch:
+    hinueb-vce1.nms.admin.ch:
+    ittmue2-vce1.nms.admin.ch:
+    jaskas-vce1.nms.admin.ch:
+    kloflu-vce3.nms.admin.ch:
+    kloluf19-vce1.nms.admin.ch:
+    konswb157-vce1.nms.admin.ch:
+    luzmur6-vce1.nms.admin.ch:
+    maghau-vce1.nms.admin.ch:
+    mcealc-vce1.nms.admin.ch:
+    meiflu-vce1.nms.admin.ch:
+    melfwk-vce1.nms.admin.ch:
+    neuesp10-vce1.nms.admin.ch:
+    nnna02032-vce1.nms.admin.ch:
+    nyodui-vce1.nms.admin.ch:
+    othlen-vce1.nms.admin.ch:
+    payaer-vce1.nms.admin.ch:
+    paycas-vce1.nms.admin.ch:
+    rumzeu-vce1.nms.admin.ch:
+    scbkil-vce1.nms.admin.ch:
+    sioaer-vce3.nms.admin.ch:
+    spiacz-vce1.nms.admin.ch:
+    stakas-vce1.nms.admin.ch:
+    stgkre12-vce1.nms.admin.ch:
+    thuwpl-vce1.nms.admin.ch:
+    wabque15-vce1.nms.admin.ch:
+    wabsef264-vce1.nms.admin.ch:
+    wanzeu-vce1.nms.admin.ch:
+    zoleic-vce1.nms.admin.ch:
+    zurrec-vce1.nms.admin.ch:
+
+  vars:
+    ansible_network_os: ios
+    ansible_connection: ansible.netcommon.network_cli
+
+    copy_protocol: ftp
+    # use either oss-jump2-nat
+    ftpserver: 131.102.155.138
+    # or oss-jump2
+    #ftpserver: 131.102.125.138
+
+    iosimages:
+      SUP2T:
+        ios_version_new: 15.5(1)SY7
+        new_ios_image_file: s2t54-ipservicesk9-mz.SPA.155-1.SY7.bin
+        new_ios_image_md5: bc945d69d09ebfde823eb602ede05ead
+        min_free_space: 250
+      SUP6T:
+        ios_version_new: 15.5(1)SY7
+        new_ios_image_file: s6t64-ipservicesk9-mz.SPA.155-1.SY7.bin
+        new_ios_image_md5: 6328f88621997e80756a88793dcc261e
+        min_free_space: 250
+

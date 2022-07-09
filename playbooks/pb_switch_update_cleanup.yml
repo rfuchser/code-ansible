@@ -1,0 +1,86 @@
+#
+# pb_switch_update_cleanup.yml
+#
+
+
+#--------------------------------------------------------------
+- name: IOS Upgrade
+#--------------------------------------------------------------
+  hosts: iosxe
+  become: no
+  gather_facts: no
+  
+
+  tasks:
+
+    #--------------------------------------------------------------
+    # Facts
+    #--------------------------------------------------------------
+    - name: Gather facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - min
+          - hardware
+
+
+    #--------------------------------------------------------------
+    # model check
+    #--------------------------------------------------------------
+    - name: Check supported model
+      include_role:
+        name: check_model
+
+
+    # some info because Ansible says nothing during this long task, until ok/fail
+    - debug:
+        msg:
+        - "next step might be slow (install remove inactive / delete recursive), be patient"
+
+    #--------------------------------------------------------------
+    - name: Remove old items on target // This could take up to 5 minutes
+    #--------------------------------------------------------------
+      ansible.netcommon.cli_command:
+        command: install remove inactive
+        prompt:
+          - "Do you want to remove the above files.*"
+        answer:
+          - 'y'
+      when:
+        - ansible_facts["net_model"] is search("C3650-") or
+          ansible_facts["net_model"] is search("C3850-") or
+          ansible_facts["net_model"] is search("C9300-") or
+          ansible_facts["net_model"] is search("C9500-")
+
+      vars:
+        ansible_command_timeout: 600
+        timeout: 600
+
+
+    #--------------------------------------------------------------
+    - name: Remove old pcap files
+    #--------------------------------------------------------------
+      ansible.netcommon.cli_command:
+        command: del /force *.pcap
+      when:
+        - ansible_facts["net_model"] is search("C3650-") or
+          ansible_facts["net_model"] is search("C3850-") or
+          ansible_facts["net_model"] is search("C9300-") or
+          ansible_facts["net_model"] is search("C9500-")
+
+
+    #--------------------------------------------------------------
+    - name: Remove unused tar files
+    #--------------------------------------------------------------
+      ansible.netcommon.cli_command:
+        command: del /force *.tar
+      when:
+        - ansible_facts["net_model"] is search("C2960CPD") or
+          ansible_facts["net_model"] is search("C2960CX")
+
+
+    #--------------------------------------------------------------
+    - name: delete obsolete files in 3560CX tiny flash
+      ansible.netcommon.cli_command:
+        command: delete /force /recursive update
+      when:
+        - ansible_facts["net_model"] is search("WS-C3560CX-")

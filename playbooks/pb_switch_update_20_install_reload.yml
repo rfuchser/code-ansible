@@ -1,0 +1,224 @@
+#
+# pb_switch_update_20_install_reload.yml
+#
+
+
+#--------------------------------------------------------------
+- name: IOS Upgrade
+#--------------------------------------------------------------
+  hosts: iosxe
+  become: no
+  gather_facts: no
+  
+  vars:
+    tftpserver: 131.102.125.138
+    tftppath: /buec
+    tftpbase: /data/tftpboot
+
+  tasks:
+
+    #--------------------------------------------------------------
+    # Facts
+    #--------------------------------------------------------------
+    - name: Gather facts
+      cisco.ios.ios_facts:
+        gather_subset:
+          - min
+          - hardware
+      tags: [devel,showversion]
+
+
+    #--------------------------------------------------------------
+    # model check
+    #--------------------------------------------------------------
+    - name: Check supported model
+      include_role:
+        name: check_model
+
+
+    #--------------------------------------------------------------
+    # version checks
+    #--------------------------------------------------------------
+    - name: Check running version
+      include_role:
+        name: check_version
+
+
+    #--------------------------------------------------------------
+    - name: Get Running Config
+    #--------------------------------------------------------------
+      ansible.netcommon.cli_command:
+        command: show run
+      register: running_config
+
+    #--------------------------------------------------------------
+    # old TACACS mode is unsupported --> breaks ACS access after reload
+    - name: detect old TACACS mode from running config
+    #--------------------------------------------------------------
+      ansible.builtin.assert:
+        that:
+          - "'tacacs-server host ' not in running_config.stdout"
+        fail_msg: "old TACACS mode (tacacs-server host) on device, this is unsupported"
+
+
+    #--------------------------------------------------------------
+    - name: Verify Image presence
+    #--------------------------------------------------------------
+      ios_command:
+        commands:
+          - "dir flash:{{ new_ios_image_file }}"
+        wait_for:
+          - result[0] not contains "%Error"
+        retries: 1
+
+    # some info because Ansible says nothing during this long task, until ok/fail
+    - debug:
+        msg: "next step is image unpacking and installation. Be patient, it can take up to 20 min"
+
+    - name: C3650/C3850/C9300/C9500 upgrade
+      block:
+
+        #--------------------------------------------------------------
+        # real installation for 3650/3850/C9300/C9500
+        # this one needs a saveconfig above, and if failing, check "show log" output
+        - name: install new image // adding file // activate commit
+        #--------------------------------------------------------------
+          ansible.netcommon.cli_command:
+            command: "install add file flash:{{ new_ios_image_file }} activate commit"
+            check_all: True
+            prompt:
+              - "you may save configuration and re-enter the command.*"
+              - "o you want to proceed.*"
+            answer:
+              - 'y'
+              - 'y'
+          vars:
+            ansible_connect_timeout: 1200
+            ansible_command_timeout: 1200
+            timeout: 1200
+
+        - debug:
+            msg: "going to reload the device, be patient"
+
+        - name: reset the connection to wait for the reload
+          meta: reset_connection
+
+        # wait until rebooted
+        - name: wait for switch to finish reload
+          ansible.builtin.wait_for_connection:
+            connect_timeout: 20
+            delay: 20
+            sleep: 5
+            timeout: 1200
+
+        # re-gather new facts to check version
+        - name: re-gather facts
+          cisco.ios.ios_facts:
+            gather_subset:
+              - min
+
+        - name: post-reload version check
+          ansible.builtin.fail:
+            msg: "post-reload version is {{ ansible_net_version }}, upgrade to {{ ios_version_new }} failed"
+          when: ansible_net_version != ios_version_new
+
+        - debug:
+            msg: "STATUS : upgrade finished, device reloaded, device is up to date"
+
+      when:
+        - ansible_facts["net_model"] is search("C3650-") or
+          ansible_facts["net_model"] is search("C3850-") or
+          ansible_facts["net_model"] is search("C9300-") or
+          ansible_facts["net_model"] is search("C9500-")
+
+    # end block C3650/C3850/C9300/C9500
+    #--------------------------------------------------------------
+
+    #--------------------------------------------------------------
+    - name: C3560CX / C2960 upgrade
+      block:
+
+        # real installation for C3560CX / C2960
+        - name: C3560CX archive download-sw /overwrite /imageonly
+        #--------------------------------------------------------------
+          cisco.ios.ios_command:
+            commands: "archive download-sw /overwrite /imageonly flash:/{{ new_ios_image_file }}"
+            wait_for: result[0] contains "software images installed"
+          vars:
+            ansible_connect_timeout: 900
+            ansible_command_timeout: 900
+            timeout: 900
+          when:
+            - ansible_facts["net_model"] is search("WS-C3560CX-")
+
+        # C2960CPD and C2960CX do not use archive, not enough space in flash to use the tar
+        # we already uploaded the bin image, and now only need to set the boot variable
+        # to the new image
+        - name: set boot path to new image on 2960
+          cisco.ios.ios_config:
+            commands:
+              - "boot system flash:/{{ new_ios_image_file }}"
+            save_when: always
+          when:
+            - ansible_facts["net_model"] is search("WS-C2960CX-8PC-L") or
+              ansible_facts["net_model"] is search("WS-C2960CPD-8PT-L")
+
+        - name: check boot image on 3560CX / C2960 step 1
+          ansible.netcommon.cli_command:
+            command: "show boot | inc BOOT path-list"
+          register: showboot
+
+        - set_fact:
+            boot_path_list: "{{ showboot.stdout_lines[0] | regex_search(': (flash:/.*)$', '\\1') | first }}"
+
+        # this would fail if not pointing correctly and so skip the reload
+        - name: check boot image on 3560CX / C2960 step 2
+          ios_command:
+            commands:
+              - "dir {{ boot_path_list }}"
+            wait_for:
+              - result[0] not contains "%Error opening"
+            retries: 1
+
+        # reload C3560CX / C2960
+        - name: reload C3560CX / C2960
+          ansible.netcommon.cli_command:
+            command: "reload"
+            check_all: True
+            prompt:
+              - "Proceed with reload"
+            answer:
+              - ''
+
+        - name: reset the connection to wait for the reload
+          meta: reset_connection
+
+        # wait until rebooted
+        - name: wait for 3560CX / C2960 to finish reload
+          ansible.builtin.wait_for_connection:
+            connect_timeout: 20
+            delay: 20
+            sleep: 5
+            timeout: 600
+
+        # re-gather new facts to check version
+        - name: re-gather facts
+          cisco.ios.ios_facts:
+            gather_subset:
+              - min
+
+        - name: post-reload version check
+          ansible.builtin.fail:
+            msg: "post-reload version is {{ ansible_net_version }}, upgrade to {{ ios_version_new }} failed"
+          when: ansible_net_version != ios_version_new
+
+        - debug:
+            msg: "STATUS : upgrade finished, device reloaded, device is up to date"
+
+      when:
+        - ansible_facts["net_model"] is search("WS-C3560CX-") or
+          ansible_facts["net_model"] is search("WS-C2960CX-8PC-L") or
+          ansible_facts["net_model"] is search("WS-C2960CPD-8PT-L")
+
+    # end block C3560CX / C2960
+    #--------------------------------------------------------------
